@@ -1,5 +1,4 @@
 import {TypeormDatabase} from '@subsquid/typeorm-store'
-import {Burn} from './model'
 import {processor, CONTRACT_ADDRESS} from './processor'
 import * as bayc from './abi/bayc'
 
