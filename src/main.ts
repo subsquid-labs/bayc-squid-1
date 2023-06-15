@@ -1,29 +1,15 @@
 import {TypeormDatabase} from '@subsquid/typeorm-store'
 import {Burn} from './model'
-import {processor} from './processor'
+import {processor, CONTRACT_ADDRESS} from './processor'
+import * as bayc from './abi/bayc'
 
 processor.run(new TypeormDatabase(), async (ctx) => {
-    const burns: Burn[] = []
-    for (let c of ctx.blocks) {
-        for (let tx of c.transactions) {
-            // decode and normalize the tx data
-            burns.push(
-                new Burn({
-                    id: tx.id,
-                    block: c.header.height,
-                    address: tx.from,
-                    value: tx.value,
-                    txHash: tx.hash,
-                })
-            )
+    for (let block of ctx.blocks) {
+        for (let log of block.logs) {
+            if (log.address === CONTRACT_ADDRESS && log.topics[0] === bayc.events.Transfer.topic) {
+                let {from, to, tokenId} = bayc.events.Transfer.decode(log)
+                ctx.log.info(`Parsed a Transfer of token ${tokenId} from ${from} to ${to}`)
+            }
         }
     }
-    // apply vectorized transformations and aggregations
-    const burned = burns.reduce((acc, b) => acc + b.value, 0n) / 1_000_000_000n
-    const startBlock = ctx.blocks.at(0)?.header.height
-    const endBlock = ctx.blocks.at(-1)?.header.height
-    ctx.log.info(`Burned ${burned} Gwei from ${startBlock} to ${endBlock}`)
-
-    // upsert batches of entities with batch-optimized ctx.store.save
-    await ctx.store.save(burns)
 })
