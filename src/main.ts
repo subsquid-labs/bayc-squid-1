@@ -1,8 +1,7 @@
 import {TypeormDatabase} from '@subsquid/typeorm-store'
-import {processor, CONTRACT_ADDRESS} from './processor'
+import {processor, CONTRACT_ADDRESS, Context} from './processor'
 import * as bayc from './abi/bayc'
-import {Transfer} from './model'
-import {Owner, Token} from './model'
+import {Transfer, Owner, Token} from './model'
 
 processor.run(new TypeormDatabase(), async (ctx) => {
     let rawTransfers: RawTransfer[] = getRawTransfers(ctx)
@@ -25,8 +24,6 @@ interface RawTransfer {
     blockNumber: number
     txHash: string
 }
-
-import {Context} from './processor'
 
 function getRawTransfers(ctx: Context): RawTransfer[] {
     let transfers: RawTransfer[] = []
