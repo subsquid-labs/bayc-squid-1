@@ -5,7 +5,7 @@ type Owner @entity {
 
 type Token @entity {
     id: ID! # string form of tokenId
-    tokenId: Int!
+    tokenId: BigInt!
     owner: Owner!
     transfers: [Transfer!]! @derivedFrom(field: "token")
 }
