@@ -2,12 +2,13 @@ import {TypeormDatabase} from '@subsquid/typeorm-store'
 import {processor, CONTRACT_ADDRESS, Context} from './processor'
 import * as bayc from './abi/bayc'
 import {Transfer, Owner, Token} from './model'
+import {TokenMetadata, fetchTokenMetadata} from './metadata'
 
 processor.run(new TypeormDatabase(), async (ctx) => {
     let rawTransfers: RawTransfer[] = getRawTransfers(ctx)
 
     let owners: Map<string, Owner> = createOwners(rawTransfers)
-    let tokens: Map<string, Token> = createTokens(rawTransfers, owners)
+    let tokens: Map<string, Token> = await createTokens(ctx, rawTransfers, owners)
     let transfers: Transfer[] = createTransfers(rawTransfers, owners, tokens)
 
     await ctx.store.upsert([...owners.values()])
@@ -57,20 +58,53 @@ function createOwners(rawTransfers: RawTransfer[]): Map<string, Owner> {
     return owners
 }
 
-function createTokens(
+async function createTokens(
+    ctx: Context,
     rawTransfers: RawTransfer[],
     owners: Map<string, Owner>
-): Map<string, Token> {
+): Promise<Map<string, Token>> {
 
-    let tokens: Map<string, Token> = new Map()
+    let tokens: Map<string, PartialToken> = new Map()
     for (let t of rawTransfers) {
         let tokenIdString = `${t.tokenId}`
-        tokens.set(tokenIdString, new Token({
+        let ptoken: PartialToken = {
             id: tokenIdString,
             tokenId: t.tokenId,
-            owner: owners.get(t.to)
+            owner: owners.get(t.to)!
+        }
+        tokens.set(tokenIdString, ptoken)
+    }
+    return await completeTokens(ctx, tokens)
+}
+
+interface PartialToken {
+    id: string
+    tokenId: bigint
+    owner: Owner
+}
+
+async function completeTokens(
+    ctx: Context,
+    partialTokens: Map<string, PartialToken>
+): Promise<Map<string, Token>> {
+
+    let tokens: Map<string, Token> = new Map()
+    if (partialTokens.size === 0) return tokens
+
+    let lastBatchBlockHeader = ctx.blocks[ctx.blocks.length-1].header
+    let contract = new bayc.Contract(ctx, lastBatchBlockHeader, CONTRACT_ADDRESS)
+
+    for (let [id, ptoken] of partialTokens) {
+        let uri = await contract.tokenURI(ptoken.tokenId)
+        ctx.log.info(`Retrieved metadata URI ${uri}`)
+        let metadata: TokenMetadata | undefined = await fetchTokenMetadata(ctx, uri)
+        tokens.set(id, new Token({
+            ...ptoken,
+            uri,
+            ...metadata
         }))
     }
+
     return tokens
 }
 
