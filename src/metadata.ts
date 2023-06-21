@@ -4,12 +4,32 @@ import axios from 'axios'
 
 import { Attribute } from './model'
 import { Context } from './processor'
+import { asyncSleep, splitIntoBatches } from './util'
+
+const MAX_REQ_SEC = 10
 
 export const IPFS_GATEWAY = 'https://ipfs.io/ipfs/'
 
 export interface TokenMetadata {
     image: string
     attributes: Attribute[]
+}
+
+export async function fetchTokenMetadatasConcurrently(
+    ctx: Context,
+    uris: string[]
+): Promise<(TokenMetadata | undefined)[]> {
+
+    let metadatas: (TokenMetadata | undefined)[] = []
+    for (let batch of splitIntoBatches(uris, MAX_REQ_SEC)) {
+        let m = await Promise.all(batch.map((uri, index) => {
+            // spread out the requests evenly within a second interval
+            let sleepMs = Math.ceil(1000*(index+1)/MAX_REQ_SEC)
+            return asyncSleep(sleepMs).then(() => fetchTokenMetadata(ctx, uri))
+        }))
+        metadatas.push(...m)
+    }
+    return metadatas
 }
 
 export async function fetchTokenMetadata(ctx: Context, uri: string): Promise<TokenMetadata | undefined> {

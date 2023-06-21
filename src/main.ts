@@ -2,7 +2,7 @@ import {TypeormDatabase} from '@subsquid/typeorm-store'
 import {processor, CONTRACT_ADDRESS, Context} from './processor'
 import * as bayc from './abi/bayc'
 import {Transfer, Owner, Token} from './model'
-import {TokenMetadata, fetchTokenMetadata} from './metadata'
+import {TokenMetadata, fetchTokenMetadatasConcurrently} from './metadata'
 import {Multicall} from './abi/multicall'
 
 const MULTICALL_ADDRESS = '0xeefba1e63905ef1d7acba5a8513c70307c1ce441'
@@ -107,13 +107,13 @@ async function completeTokens(
         MULTICALL_BATCH_SIZE // paginating to avoid RPC timeouts
     )
 
+    let metadatas: (TokenMetadata | undefined)[] = await fetchTokenMetadatasConcurrently(ctx, tokenURIs)
+
     for (let [i, ptoken] of partialTokens.entries()) {
-        let uri = tokenURIs[i]
-        let metadata: TokenMetadata | undefined = await fetchTokenMetadata(ctx, uri)
         tokens.set(ptoken.id, new Token({
             ...ptoken,
-            uri,
-            ...metadata
+            uri: tokenURIs[i],
+            ...metadatas[i]
         }))
     }
 
