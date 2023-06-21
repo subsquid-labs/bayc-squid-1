@@ -3,6 +3,10 @@ import {processor, CONTRACT_ADDRESS, Context} from './processor'
 import * as bayc from './abi/bayc'
 import {Transfer, Owner, Token} from './model'
 import {TokenMetadata, fetchTokenMetadata} from './metadata'
+import {Multicall} from './abi/multicall'
+
+const MULTICALL_ADDRESS = '0xeefba1e63905ef1d7acba5a8513c70307c1ce441'
+const MULTICALL_BATCH_SIZE = 100
 
 processor.run(new TypeormDatabase(), async (ctx) => {
     let rawTransfers: RawTransfer[] = getRawTransfers(ctx)
@@ -85,20 +89,28 @@ interface PartialToken {
 
 async function completeTokens(
     ctx: Context,
-    partialTokens: Map<string, PartialToken>
+    partialTokensMap: Map<string, PartialToken>
 ): Promise<Map<string, Token>> {
 
+    let partialTokens: PartialToken[] = [...partialTokensMap.values()]
+
     let tokens: Map<string, Token> = new Map()
-    if (partialTokens.size === 0) return tokens
+    if (partialTokens.length === 0) return tokens
 
     let lastBatchBlockHeader = ctx.blocks[ctx.blocks.length-1].header
-    let contract = new bayc.Contract(ctx, lastBatchBlockHeader, CONTRACT_ADDRESS)
+    let contract = new Multicall(ctx, lastBatchBlockHeader, MULTICALL_ADDRESS)
 
-    for (let [id, ptoken] of partialTokens) {
-        let uri = await contract.tokenURI(ptoken.tokenId)
-        ctx.log.info(`Retrieved metadata URI ${uri}`)
+    let tokenURIs = await contract.aggregate(
+        bayc.functions.tokenURI,
+        CONTRACT_ADDRESS,
+        partialTokens.map(t => [t.tokenId]),
+        MULTICALL_BATCH_SIZE // paginating to avoid RPC timeouts
+    )
+
+    for (let [i, ptoken] of partialTokens.entries()) {
+        let uri = tokenURIs[i]
         let metadata: TokenMetadata | undefined = await fetchTokenMetadata(ctx, uri)
-        tokens.set(id, new Token({
+        tokens.set(ptoken.id, new Token({
             ...ptoken,
             uri,
             ...metadata
