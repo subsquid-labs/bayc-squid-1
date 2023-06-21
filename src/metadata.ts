@@ -5,6 +5,8 @@ import axios from 'axios'
 import { Attribute } from './model'
 import { Context } from './processor'
 import { asyncSleep, splitIntoBatches } from './util'
+import { Token } from './model'
+import { In } from 'typeorm'
 
 const MAX_REQ_SEC = 10
 
@@ -13,6 +15,55 @@ export const IPFS_GATEWAY = 'https://ipfs.io/ipfs/'
 export interface TokenMetadata {
     image: string
     attributes: Attribute[]
+}
+
+export async function selectivelyUpdateMetadata(
+    ctx: Context,
+    tokens: Map<string, Token>
+): Promise<Map<string, Token>> {
+
+    let knownTokens: Map<string, Token> = await ctx.store.findBy(
+            Token,
+            {id: In([...tokens.keys()])}
+        )
+        .then(ts => new Map(ts.map(t => [t.id, t])))
+
+    let updatedTokens: Map<string, Token> = new Map()
+    let tokensToBeUpdated: Token[] = []
+    for (let [id, t] of tokens) {
+        let ktoken: Token | undefined = knownTokens.get(id)
+        if (ktoken != null &&
+            ktoken.image != null && ktoken.attributes != null &&
+            ktoken.uri === t.uri && uriPointsToImmutable(t.uri)) {
+
+            ctx.log.info(`Repeated retrieval from ${t.uri} skipped`)
+            updatedTokens.set(id, ktoken)
+        }
+        else {
+            ctx.log.info(`Re-retrieving from ${t.uri}`)
+            tokensToBeUpdated.push(t)
+        }
+    }
+
+    let metadatas: (TokenMetadata | undefined)[] = await fetchTokenMetadatasConcurrently(
+        ctx,
+        tokensToBeUpdated.map(t => t.uri)
+    )
+
+    for (let [i, t] of tokensToBeUpdated.entries()) {
+        let m = metadatas[i]
+        if (m != null) {
+            t.image = m.image
+            t.attributes = m.attributes
+        }
+        updatedTokens.set(t.id, t)
+    }
+
+    return updatedTokens
+}
+
+export function uriPointsToImmutable(uri: string): boolean {
+    return uri.startsWith('ipfs://') && !uri.includes('ipns')
 }
 
 export async function fetchTokenMetadatasConcurrently(
