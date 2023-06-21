@@ -1,4 +1,5 @@
 import {TypeormDatabase} from '@subsquid/typeorm-store'
+import {In, LessThan} from 'typeorm'
 import {processor, CONTRACT_ADDRESS, Context} from './processor'
 import * as bayc from './abi/bayc'
 import {Transfer, Owner, Token} from './model'
@@ -7,6 +8,7 @@ import {Multicall} from './abi/multicall'
 
 const MULTICALL_ADDRESS = '0xeefba1e63905ef1d7acba5a8513c70307c1ce441'
 const MULTICALL_BATCH_SIZE = 100
+const METADATA_RETRIEVAL_INTERVAL_BLOCKS = 100
 
 processor.run(new TypeormDatabase(), async (ctx) => {
     let rawTransfers: RawTransfer[] = getRawTransfers(ctx)
@@ -18,6 +20,12 @@ processor.run(new TypeormDatabase(), async (ctx) => {
     await ctx.store.upsert([...owners.values()])
     await ctx.store.upsert([...tokens.values()])
     await ctx.store.insert(transfers)
+
+    if (ctx.isHead) {
+        let updatedTokens = await updateTokensWithOutdatedMetadata(ctx)
+        await ctx.store.upsert(updatedTokens)
+        ctx.log.info(`Updated metadata for ${updatedTokens.length} tokens`)
+    }
 })
 
 interface RawTransfer {
@@ -68,53 +76,28 @@ async function createTokens(
     owners: Map<string, Owner>
 ): Promise<Map<string, Token>> {
 
-    let tokens: Map<string, PartialToken> = new Map()
+    let tokens: Map<string, Token> = new Map()
     for (let t of rawTransfers) {
         let tokenIdString = `${t.tokenId}`
-        let ptoken: PartialToken = {
+        tokens.set(tokenIdString, new Token({
             id: tokenIdString,
             tokenId: t.tokenId,
-            owner: owners.get(t.to)!
-        }
-        tokens.set(tokenIdString, ptoken)
-    }
-    return await completeTokens(ctx, tokens)
-}
-
-interface PartialToken {
-    id: string
-    tokenId: bigint
-    owner: Owner
-}
-
-async function completeTokens(
-    ctx: Context,
-    partialTokensMap: Map<string, PartialToken>
-): Promise<Map<string, Token>> {
-
-    let partialTokens: PartialToken[] = [...partialTokensMap.values()]
-
-    let tokens: Map<string, Token> = new Map()
-    if (partialTokens.length === 0) return tokens
-
-    let lastBatchBlockHeader = ctx.blocks[ctx.blocks.length-1].header
-    let contract = new Multicall(ctx, lastBatchBlockHeader, MULTICALL_ADDRESS)
-
-    let tokenURIs = await contract.aggregate(
-        bayc.functions.tokenURI,
-        CONTRACT_ADDRESS,
-        partialTokens.map(t => [t.tokenId]),
-        MULTICALL_BATCH_SIZE // paginating to avoid RPC timeouts
-    )
-
-    for (let [i, ptoken] of partialTokens.entries()) {
-        tokens.set(ptoken.id, new Token({
-            ...ptoken,
-            uri: tokenURIs[i],
+            owner: owners.get(t.to)!,
+            lastRetrieval: 0
         }))
     }
 
-    return await selectivelyUpdateMetadata(ctx, tokens)
+    let knownTokens = await ctx.store.findBy(
+        Token,
+        {id: In([...tokens.keys()])}
+    )
+
+    for (let kt of knownTokens) {
+        kt.owner = tokens.get(kt.id)!.owner
+        tokens.set(kt.id, kt)
+    }
+
+    return tokens
 }
 
 function createTransfers(
@@ -132,4 +115,27 @@ function createTransfers(
         blockNumber: t.blockNumber,
         txHash: t.txHash
     }))
+}
+
+async function updateTokensWithOutdatedMetadata(
+    ctx: Context
+): Promise<Token[]> {
+
+    let lastBlockHeader = ctx.blocks[ctx.blocks.length-1].header
+    let maxAcceptableHeight = lastBlockHeader.height - METADATA_RETRIEVAL_INTERVAL_BLOCKS
+    let tokensToBeUpdated = await ctx.store.find(Token, {where: {lastRetrieval: LessThan(maxAcceptableHeight)}})
+
+    let contract = new Multicall(ctx, lastBlockHeader, MULTICALL_ADDRESS)
+    let tokenURIs = await contract.aggregate(
+        bayc.functions.tokenURI,
+        CONTRACT_ADDRESS,
+        tokensToBeUpdated.map(t => [t.tokenId]),
+        MULTICALL_BATCH_SIZE // paginating to avoid RPC timeouts
+    )
+
+    let updatedTokens = await selectivelyUpdateMetadata(ctx, tokensToBeUpdated, tokenURIs)
+    for (let ut of updatedTokens) {
+        ut.lastRetrieval = lastBlockHeader.height
+    }
+    return updatedTokens
 }

@@ -20,8 +20,11 @@ export class Token {
     @ManyToOne_(() => Owner, {nullable: true})
     owner!: Owner
 
-    @Column_("text", {nullable: false})
-    uri!: string
+    @Column_("int4", {nullable: false})
+    lastRetrieval!: number
+
+    @Column_("text", {nullable: true})
+    uri!: string | undefined | null
 
     @Column_("text", {nullable: true})
     image!: string | undefined | null
